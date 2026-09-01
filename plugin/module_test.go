@@ -13,6 +13,7 @@ import (
 
 	sdk "github.com/bomly-dev/bomly-sdk"
 	"github.com/bomly-dev/bomly-sdk/conformance"
+	"github.com/bomly-dev/bomly-sdk/testkit"
 	"go.uber.org/zap"
 )
 
@@ -83,9 +84,7 @@ func newOSVServer(t *testing.T) *httptest.Server {
 func newDeltaTestGraph(t *testing.T) *sdk.Graph {
 	t.Helper()
 	graph := sdk.New()
-	dep := sdk.NewDependencyRef("vulnerable-pkg", "1.0.0")
-	dep.PURL = "pkg:npm/vulnerable-pkg@1.0.0"
-	dep.Ecosystem = sdk.EcosystemNPM
+	dep := testkit.MustDependencyNode(t, "pkg:npm/vulnerable-pkg@1.0.0")
 	if err := graph.AddNode(dep); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}

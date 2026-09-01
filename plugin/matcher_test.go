@@ -12,17 +12,17 @@ import (
 
 	"github.com/bomly-dev/bomly-sdk"
 	audcache "github.com/bomly-dev/bomly-sdk/filecache"
+	"github.com/bomly-dev/bomly-sdk/testkit"
 )
 
 // --- buildQuery ---
 
 func TestBuildQuery_PURLBased(t *testing.T) {
-	dep := &sdk.Dependency{Coordinates: sdk.Coordinates{Name: "lodash",
-		Version:   "4.17.15",
-		PURL:      "pkg:npm/lodash@4.17.15",
-		Ecosystem: "npm"},
-	}
-	purl := sdk.CanonicalPackageURLFromDependency(dep)
+	// Through the constructor: a node's identity is minted there and the
+	// fields holding it are unexported, so a hand-built literal has no ID at
+	// all. That is the ADR-0041 invariant, and it is why this fixture changed.
+	dep := testkit.MustDependencyNode(t, "pkg:npm/lodash@4.17.15")
+	purl := dep.NodeID()
 	key, query, ok := buildQuery(dep, purl)
 	if !ok {
 		t.Fatal("expected query to be built for PURL package")
@@ -43,7 +43,7 @@ func TestBuildQuery_PURLBased(t *testing.T) {
 }
 
 func TestBuildQuery_NameEcosystemVersion(t *testing.T) {
-	dep := &sdk.Dependency{Coordinates: sdk.Coordinates{Name: "requests",
+	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "requests",
 		Version:   "2.28.0",
 		Ecosystem: "python"},
 	}
@@ -73,8 +73,8 @@ func TestBuildQuery_NameEcosystemVersion(t *testing.T) {
 // OSV keys npm packages by their scoped name, and the cache key must separate
 // a scoped package from the same-named unscoped one. See issue #319.
 func TestBuildQuery_NameFallbackKeepsNPMScope(t *testing.T) {
-	scoped := &sdk.Dependency{Coordinates: sdk.Coordinates{Org: "tailwindcss", Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
-	unscoped := &sdk.Dependency{Coordinates: sdk.Coordinates{Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
+	scoped := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Org: "tailwindcss", Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
+	unscoped := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
 
 	scopedKey, scopedQuery, ok := buildQuery(scoped, "")
 	if !ok {
@@ -98,7 +98,7 @@ func TestBuildQuery_NameFallbackKeepsNPMScope(t *testing.T) {
 }
 
 func TestBuildQuery_SkipsNoVersion(t *testing.T) {
-	dep := &sdk.Dependency{Coordinates: sdk.Coordinates{Name: "lodash", Ecosystem: "npm"}}
+	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "lodash", Ecosystem: "npm"}}
 	_, _, ok := buildQuery(dep, "")
 	if ok {
 		t.Error("expected package without version to be skipped (no query built)")
@@ -106,7 +106,7 @@ func TestBuildQuery_SkipsNoVersion(t *testing.T) {
 }
 
 func TestBuildQuery_SkipsUnknownEcosystem(t *testing.T) {
-	dep := &sdk.Dependency{Coordinates: sdk.Coordinates{Name: "my-pkg", Version: "1.0.0", Ecosystem: "unknown-eco"}}
+	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "my-pkg", Version: "1.0.0", Ecosystem: "unknown-eco"}}
 	_, _, ok := buildQuery(dep, "")
 	if ok {
 		t.Error("expected package with unknown ecosystem and no PURL to be skipped")
@@ -115,10 +115,12 @@ func TestBuildQuery_SkipsUnknownEcosystem(t *testing.T) {
 
 // --- enrichment ---
 
-func buildTestGraph() *sdk.Graph {
+func buildTestGraph(t testing.TB) *sdk.Graph {
+	t.Helper()
 	graph := sdk.New()
-	dep := sdk.NewDependencyRef("vulnerable-pkg", "1.0.0")
-	dep.PURL = "pkg:generic/vulnerable-pkg@1.0.0"
+	// Identity is minted through the constructor now, so the fixture states a
+	// package URL rather than assigning coordinates after the fact.
+	dep := testkit.MustDependencyNode(t, "pkg:generic/vulnerable-pkg@1.0.0")
 	_ = graph.AddNode(dep)
 	return graph
 }
@@ -143,7 +145,7 @@ func TestMatcherMatchEnrichesRegistry(t *testing.T) {
 
 	registry := sdk.NewPackageRegistry()
 	result, err := matcher.Match(context.Background(), sdk.MatchRequest{
-		Graph:    buildTestGraph(),
+		Graph:    buildTestGraph(t),
 		Registry: registry,
 	})
 	if err != nil {
@@ -189,13 +191,16 @@ func TestMatcherMatchSkipsFirstPartyPackages(t *testing.T) {
 	}
 
 	graph := sdk.New()
-	app := sdk.NewDependency(sdk.Dependency{Coordinates: sdk.Coordinates{
-		Name: "my-module", Version: "1.0.0", Ecosystem: "maven",
-		PURL: "pkg:maven/com.acme/my-module@1.0.0", Type: sdk.PackageTypeApplication, FirstParty: true,
-	}})
-	dep := sdk.NewDependency(sdk.Dependency{Coordinates: sdk.Coordinates{
-		Name: "lodash", Version: "4.17.15", Ecosystem: "npm", PURL: "pkg:npm/lodash@4.17.15",
-	}})
+	// The project's own artifact is a module node now, not a dependency
+	// carrying FirstParty. That flag is gone: under ADR-0041 the node kind
+	// carries ownership, so a workspace member simply is not a dependency
+	// node and DependencyNodes() never yields it. The skip this test pins is
+	// therefore structural rather than a flag check -- which is the point.
+	app := testkit.MustModuleNode(t, "pom.xml", sdk.Coordinates{
+		Name: "my-module", Version: "1.0.0", Ecosystem: sdk.EcosystemMaven,
+		Org: "com.acme", PURL: "pkg:maven/com.acme/my-module@1.0.0",
+	})
+	dep := testkit.MustDependencyNode(t, "pkg:npm/lodash@4.17.15")
 	_ = graph.AddNode(app)
 	_ = graph.AddNode(dep)
 
@@ -207,7 +212,7 @@ func TestMatcherMatchSkipsFirstPartyPackages(t *testing.T) {
 		t.Fatalf("expected exactly one OSV query (third-party only), got %d: %v", len(queried), queried)
 	}
 	if strings.Contains(queried[0], "my-module") {
-		t.Fatalf("first-party application package must not be queried, got %q", queried[0])
+		t.Fatalf("the project's own module must not be queried, got %q", queried[0])
 	}
 	if !strings.Contains(queried[0], "lodash") {
 		t.Fatalf("expected the third-party package to be queried, got %q", queried[0])
@@ -237,12 +242,8 @@ func TestAudit_CacheHit_NoHTTPCall(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	dep := sdk.NewDependency(sdk.Dependency{Coordinates: sdk.Coordinates{Name: "lodash",
-		Version:   "4.17.15",
-		PURL:      "pkg:npm/lodash@4.17.15",
-		Ecosystem: "npm"},
-	})
-	purl := sdk.CanonicalPackageURLFromDependency(dep)
+	dep := testkit.MustDependencyNode(t, "pkg:npm/lodash@4.17.15")
+	purl := dep.NodeID()
 
 	// Pre-populate cache so the matcher won't need to call the server.
 	key := audcache.NewKey(purl, "", "", "")
@@ -309,17 +310,9 @@ func TestAudit_OSVFailure_ReturnsPartialResultAndWarningError(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	dep := sdk.NewDependency(sdk.Dependency{Coordinates: sdk.Coordinates{Name: "lodash",
-		Version:   "4.17.15",
-		PURL:      "pkg:npm/lodash@4.17.15",
-		Ecosystem: "npm"},
-	})
-	cachedDep := sdk.NewDependency(sdk.Dependency{Coordinates: sdk.Coordinates{Name: "cached",
-		Version:   "1.0.0",
-		PURL:      "pkg:npm/cached@1.0.0",
-		Ecosystem: "npm"},
-	})
-	cachedPURL := sdk.CanonicalPackageURLFromDependency(cachedDep)
+	dep := testkit.MustDependencyNode(t, "pkg:npm/lodash@4.17.15")
+	cachedDep := testkit.MustDependencyNode(t, "pkg:npm/cached@1.0.0")
+	cachedPURL := cachedDep.NodeID()
 	if err := audcache.Set(aud.cache, audcache.NewKey(cachedPURL, "", "", ""), []Vulnerability{{
 		ID:      "OSV-CACHED",
 		Summary: "cached evidence",
@@ -520,13 +513,18 @@ func TestDeclaredEcosystemsAreQueryable(t *testing.T) {
 
 		queryable := false
 		for _, manager := range managers {
-			dep := &sdk.Dependency{Coordinates: sdk.Coordinates{
-				Name:           "example",
-				Version:        "1.0.0",
-				Ecosystem:      eco,
-				PackageManager: manager,
-			}}
-			purl := sdk.CanonicalPackageURLFromDependency(dep)
+			// Two coordinate shapes are tried because purl type profiles
+			// disagree about namespaces: maven, golang and composer require
+			// one, while other types prohibit it. This test is about OSV
+			// coverage per ecosystem, not about coordinate shape, so it takes
+			// whichever shape the type accepts rather than carrying a
+			// per-ecosystem fixture table that would drift from the profiles.
+			dep := mintExample(eco, manager)
+			if dep == nil {
+				t.Errorf("descriptor declares %q but %q mints no node in either coordinate shape", eco, manager)
+				continue
+			}
+			purl := dep.NodeID()
 			if purl == "" {
 				t.Errorf("descriptor declares %q but %q produces no canonical PURL", eco, manager)
 				continue
@@ -545,14 +543,14 @@ func TestDeclaredEcosystemsAreQueryable(t *testing.T) {
 // ecosystem query is available: OSV answers the unknown type with an empty
 // result rather than an error.
 func TestBuildQueryFallsBackWhenPURLTypeIsNotOSVIndexed(t *testing.T) {
-	dep := &sdk.Dependency{Coordinates: sdk.Coordinates{
+	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{
 		Name:      "AFNetworking",
 		Version:   "4.0.1",
 		Ecosystem: sdk.EcosystemSwift,
 		PURL:      "pkg:cocoapods/AFNetworking@4.0.1",
 	}}
 
-	_, query, ok := buildQuery(dep, sdk.CanonicalPackageURLFromDependency(dep))
+	_, query, ok := buildQuery(dep, dep.NodeID())
 	if !ok {
 		t.Fatal("expected a query to be built")
 	}
@@ -574,13 +572,16 @@ func TestBuildQueryFallsBackWhenPURLTypeIsNotOSVIndexed(t *testing.T) {
 // must stay on their own unindexed pkg:otp identity. Rebar dependencies do
 // resolve from Hex and must keep matching.
 func TestBuildQueryDoesNotQueryOTPApplicationsAsHex(t *testing.T) {
-	otp := &sdk.Dependency{Coordinates: sdk.Coordinates{
+	otp, err := sdk.NewDependencyNode(sdk.Coordinates{
 		Name:           "kernel",
 		Version:        "9.2",
 		Ecosystem:      sdk.EcosystemErlang,
 		PackageManager: sdk.PackageManagerOTP,
-	}}
-	purl := sdk.CanonicalPackageURLFromDependency(otp)
+	})
+	if err != nil {
+		t.Fatalf("NewDependencyNode: %v", err)
+	}
+	purl := otp.NodeID()
 	if purl != "pkg:otp/kernel@9.2" {
 		t.Fatalf("OTP PURL = %q, want %q", purl, "pkg:otp/kernel@9.2")
 	}
@@ -597,13 +598,16 @@ func TestBuildQueryDoesNotQueryOTPApplicationsAsHex(t *testing.T) {
 		t.Errorf("PURL = %q, want %q", purlPkg.Purl, "pkg:otp/kernel@9.2")
 	}
 
-	rebar := &sdk.Dependency{Coordinates: sdk.Coordinates{
+	rebar, err := sdk.NewDependencyNode(sdk.Coordinates{
 		Name:           "cowboy",
 		Version:        "2.10.0",
 		Ecosystem:      sdk.EcosystemErlang,
 		PackageManager: sdk.PackageManagerRebar,
-	}}
-	rebarPURL := sdk.CanonicalPackageURLFromDependency(rebar)
+	})
+	if err != nil {
+		t.Fatalf("NewDependencyNode: %v", err)
+	}
+	rebarPURL := rebar.NodeID()
 	if rebarPURL != "pkg:hex/cowboy@2.10.0" {
 		t.Fatalf("rebar PURL = %q, want %q", rebarPURL, "pkg:hex/cowboy@2.10.0")
 	}
@@ -616,13 +620,16 @@ func TestBuildQueryDoesNotQueryOTPApplicationsAsHex(t *testing.T) {
 // the PURL: it costs one slot in a batch we are already making, and dropping
 // the package would lose the only signal we have.
 func TestBuildQueryKeepsPURLWhenNoEcosystemName(t *testing.T) {
-	dep := &sdk.Dependency{Coordinates: sdk.Coordinates{
+	dep, err := sdk.NewDependencyNode(sdk.Coordinates{
 		Name:      "zlib",
 		Version:   "1.3",
 		Ecosystem: sdk.EcosystemCPP,
-	}}
+	})
+	if err != nil {
+		t.Fatalf("NewDependencyNode: %v", err)
+	}
 
-	_, query, ok := buildQuery(dep, sdk.CanonicalPackageURLFromDependency(dep))
+	_, query, ok := buildQuery(dep, dep.NodeID())
 	if !ok {
 		t.Fatal("expected a query to be built")
 	}
@@ -633,4 +640,24 @@ func TestBuildQueryKeepsPURLWhenNoEcosystemName(t *testing.T) {
 	if purlPkg.Purl != "pkg:conan/zlib@1.3" {
 		t.Errorf("PURL = %q, want %q", purlPkg.Purl, "pkg:conan/zlib@1.3")
 	}
+}
+
+// mintExample builds an example dependency node for an ecosystem, trying the
+// namespaced coordinate shape first and falling back to the bare one. It
+// returns nil when neither mints, which is a real gap rather than a fixture
+// detail.
+func mintExample(eco sdk.Ecosystem, manager sdk.PackageManager) *sdk.DependencyNode {
+	for _, org := range []string{"com.example", ""} {
+		node, err := sdk.NewDependencyNode(sdk.Coordinates{
+			Org:            org,
+			Name:           "example",
+			Version:        "1.0.0",
+			Ecosystem:      eco,
+			PackageManager: manager,
+		})
+		if err == nil && node.NodeID() != "" {
+			return node
+		}
+	}
+	return nil
 }

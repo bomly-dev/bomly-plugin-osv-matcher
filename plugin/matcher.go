@@ -13,6 +13,7 @@ import (
 
 	"github.com/bomly-dev/bomly-sdk"
 	cache "github.com/bomly-dev/bomly-sdk/filecache"
+	"github.com/bomly-dev/bomly-sdk/purlkit"
 	"go.uber.org/zap"
 )
 
@@ -255,9 +256,9 @@ func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResul
 		return emptyMatchResult(req, useDeltas), nil
 	}
 
-	deps := req.Graph.Nodes()
+	deps := req.Graph.DependencyNodes()
 	if req.Target != nil {
-		deps = []*sdk.Dependency{req.Target}
+		deps = []*sdk.DependencyNode{req.Target}
 	}
 	if len(deps) == 0 {
 		return emptyMatchResult(req, useDeltas), nil
@@ -279,14 +280,14 @@ func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResul
 
 	// First pass: try cache
 	for _, dep := range deps {
-		if !sdk.NodeIsEnrichable(dep) {
+		if !dep.RegistryMatchEligible() {
 			// First-party artifacts (workspace members, reactor modules, the
 			// project's own package) are absent from OSV; querying them only
 			// risks coincidental name matches.
 			stats.skippedPackages++
 			continue
 		}
-		purl := sdk.CanonicalPackageURLFromDependency(dep)
+		purl := dep.NodeID()
 		if purl == "" {
 			stats.skippedPackages++
 			continue
@@ -421,7 +422,7 @@ func emptyMatchResult(req sdk.MatchRequest, useDeltas bool) sdk.MatchResult {
 // registry mutation for legacy hosts, or package-update deltas when the host
 // accepts them. Both shapes mark the matched graph dependencies so embedded
 // execution behaves identically.
-func (a *Matcher) matchResult(req sdk.MatchRequest, deps []*sdk.Dependency, enriched map[string][]sdk.Vulnerability, requestedPackages int, useDeltas bool) sdk.MatchResult {
+func (a *Matcher) matchResult(req sdk.MatchRequest, deps []*sdk.DependencyNode, enriched map[string][]sdk.Vulnerability, requestedPackages int, useDeltas bool) sdk.MatchResult {
 	if useDeltas {
 		updates := packageVulnerabilityUpdates(deps, enriched)
 		return sdk.MatchResult{
@@ -441,14 +442,14 @@ func (a *Matcher) matchResult(req sdk.MatchRequest, deps []*sdk.Dependency, enri
 // and the vulnerability list, so the host's MergeFrom application reproduces
 // applyPackageVulnerabilityEnrichment. Matched graph dependencies are marked
 // exactly as the legacy path marks them.
-func packageVulnerabilityUpdates(deps []*sdk.Dependency, enriched map[string][]sdk.Vulnerability) []*sdk.Package {
-	purlToDeps := make(map[string][]*sdk.Dependency, len(deps))
+func packageVulnerabilityUpdates(deps []*sdk.DependencyNode, enriched map[string][]sdk.Vulnerability) []*sdk.Package {
+	purlToDeps := make(map[string][]*sdk.DependencyNode, len(deps))
 	order := make([]string, 0, len(deps))
 	for _, dep := range deps {
-		if !sdk.NodeIsEnrichable(dep) {
+		if !dep.RegistryMatchEligible() {
 			continue
 		}
-		purl := sdk.CanonicalPackageURLFromDependency(dep)
+		purl := dep.NodeID()
 		if purl == "" {
 			continue
 		}
@@ -591,7 +592,7 @@ func statsValue(stats *auditStats, getter func(*auditStats) int) int {
 // purl is the canonical PURL already computed for dep.
 // Returns (key, query, true) when there is enough information to query OSV.
 // Returns (_, _, false) when the dependency should be skipped.
-func buildQuery(dep *sdk.Dependency, purl string) (cache.Key, BatchQuery, bool) {
+func buildQuery(dep *sdk.DependencyNode, purl string) (cache.Key, BatchQuery, bool) {
 	if dep.Version == "" {
 		// OSV requires a version for meaningful results.
 		return cache.Key{}, BatchQuery{}, false
@@ -665,8 +666,8 @@ var osvPURLTypes = map[string]struct{}{
 
 // osvResolvesPURL reports whether OSV indexes the package-url type of purl.
 func osvResolvesPURL(purl string) bool {
-	parsed := sdk.ParsePackageURL(purl)
-	if parsed == nil {
+	parsed, err := purlkit.Parse(purl)
+	if err != nil {
 		return false
 	}
 	_, ok := osvPURLTypes[strings.ToLower(strings.TrimSpace(parsed.Type))]
@@ -738,16 +739,16 @@ func markKEVVulnerabilities(vulnerabilities map[string][]sdk.Vulnerability, cata
 
 // applyPackageVulnerabilityEnrichment folds enriched vulnerabilities (keyed by
 // PURL) into the registry, and marks the corresponding dependencies matched.
-func applyPackageVulnerabilityEnrichment(registry *sdk.PackageRegistry, deps []*sdk.Dependency, enriched map[string][]sdk.Vulnerability) {
+func applyPackageVulnerabilityEnrichment(registry *sdk.PackageRegistry, deps []*sdk.DependencyNode, enriched map[string][]sdk.Vulnerability) {
 	if registry == nil {
 		return
 	}
-	purlToDeps := make(map[string][]*sdk.Dependency, len(deps))
+	purlToDeps := make(map[string][]*sdk.DependencyNode, len(deps))
 	for _, dep := range deps {
-		if !sdk.NodeIsEnrichable(dep) {
+		if !dep.RegistryMatchEligible() {
 			continue
 		}
-		purl := sdk.CanonicalPackageURLFromDependency(dep)
+		purl := dep.NodeID()
 		if purl == "" {
 			continue
 		}
