@@ -507,10 +507,7 @@ func osvMatcherStats(enriched map[string][]sdk.Vulnerability, requestedPackages 
 	for _, entries := range enriched {
 		vulnerabilities += len(entries)
 	}
-	unmatchedPackages := requestedPackages - len(enriched)
-	if unmatchedPackages < 0 {
-		unmatchedPackages = 0
-	}
+	unmatchedPackages := max(requestedPackages-len(enriched), 0)
 	return sdk.MatcherStats{
 		Name:              Name,
 		DisplayName:       displayName,

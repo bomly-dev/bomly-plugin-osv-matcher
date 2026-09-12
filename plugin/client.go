@@ -112,10 +112,7 @@ func (c *Client) QueryBatch(queries []BatchQuery) ([]BatchResult, error) {
 
 	var all []BatchResult
 	for i := 0; i < len(queries); i += c.config.BatchSize {
-		end := i + c.config.BatchSize
-		if end > len(queries) {
-			end = len(queries)
-		}
+		end := min(i+c.config.BatchSize, len(queries))
 		results, err := c.queryChunk(queries[i:end])
 		if err != nil {
 			return nil, err
@@ -134,7 +131,7 @@ func (c *Client) queryChunk(queries []BatchQuery) ([]BatchResult, error) {
 	endpoint := c.config.APIBase + "/v1/querybatch"
 
 	var last error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		results, retryErr, fatalErr := c.queryChunkAttempt(endpoint, body, attempt)
 		if fatalErr != nil {
 			return nil, fatalErr
