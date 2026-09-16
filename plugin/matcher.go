@@ -11,10 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bomly-dev/bomly-sdk"
 	cache "github.com/bomly-dev/bomly-sdk/filecache"
 	"github.com/bomly-dev/bomly-sdk/purlkit"
 	"go.uber.org/zap"
+
+	"github.com/bomly-dev/bomly-sdk/httpkit"
+	"github.com/bomly-dev/bomly-sdk/model"
+	sdkplugin "github.com/bomly-dev/bomly-sdk/plugin"
 )
 
 const (
@@ -53,7 +56,7 @@ type Config struct {
 	// KEVClient overrides the CISA KEV HTTP client. Maybe nil.
 	KEVClient *http.Client
 	// HTTPClientProvider supplies shared HTTP clients when Client/KEVClient are nil.
-	HTTPClientProvider *sdk.HTTPClientProvider
+	HTTPClientProvider *httpkit.ClientProvider
 }
 
 // DefaultConfig returns a production-ready OSV matcher config.
@@ -183,15 +186,15 @@ func New(config Config) (*Matcher, error) {
 }
 
 // Descriptor returns the matcher registration metadata.
-func (a *Matcher) Descriptor() sdk.MatcherDescriptor {
-	return sdk.MatcherDescriptor{
+func (a *Matcher) Descriptor() sdkplugin.MatcherDescriptor {
+	return sdkplugin.MatcherDescriptor{
 		Name:        Name,
 		DisplayName: displayName,
 		// The package-updates delta protocol is safe here because every
 		// registry mutation this matcher performs is expressible through
 		// Package.MergeFrom: vulnerabilities are unioned by (Source, ID) and
 		// Matched is ORed in — exactly what the legacy in-place path does.
-		Capabilities: []string{sdk.CapabilityPackageUpdates},
+		Capabilities: []string{sdkplugin.CapabilityPackageUpdates},
 		// OSV.dev publishes the ecosystems it covers, and that list is finite:
 		// https://google.github.io/osv.dev/data/#covered-ecosystems
 		//
@@ -204,38 +207,38 @@ func (a *Matcher) Descriptor() sdk.MatcherDescriptor {
 		// OSS-Fuzz based rather than a Conan package ecosystem. Julia,
 		// Bitnami, Android, and the Linux kernel are covered by OSV but have
 		// no Bomly ecosystem to map onto.
-		SupportedEcosystems: []sdk.Ecosystem{
-			sdk.EcosystemNPM,
-			sdk.EcosystemMaven,
-			sdk.EcosystemScala,
-			sdk.EcosystemGo,
-			sdk.EcosystemPython,
-			sdk.EcosystemDotNet,
-			sdk.EcosystemRuby,
-			sdk.EcosystemRust,
-			sdk.EcosystemPHP,
-			sdk.EcosystemDart,
-			sdk.EcosystemSwift,
-			sdk.EcosystemElixir,
-			sdk.EcosystemErlang,
-			sdk.EcosystemHaskell,
-			sdk.EcosystemR,
-			sdk.EcosystemOCaml,
-			sdk.EcosystemGitHub,
-			sdk.EcosystemAPK,
-			sdk.EcosystemDPKG,
-			sdk.EcosystemRPM,
+		SupportedEcosystems: []model.Ecosystem{
+			model.EcosystemNPM,
+			model.EcosystemMaven,
+			model.EcosystemScala,
+			model.EcosystemGo,
+			model.EcosystemPython,
+			model.EcosystemDotNet,
+			model.EcosystemRuby,
+			model.EcosystemRust,
+			model.EcosystemPHP,
+			model.EcosystemDart,
+			model.EcosystemSwift,
+			model.EcosystemElixir,
+			model.EcosystemErlang,
+			model.EcosystemHaskell,
+			model.EcosystemR,
+			model.EcosystemOCaml,
+			model.EcosystemGitHub,
+			model.EcosystemAPK,
+			model.EcosystemDPKG,
+			model.EcosystemRPM,
 		},
 	}
 }
 
 // Ready reports whether this matcher can run. OSV requires no local binary.
-func (a *Matcher) Ready(context.Context, sdk.MatchRequest) error {
+func (a *Matcher) Ready(context.Context, sdkplugin.MatchRequest) error {
 	return nil
 }
 
 // Applicable reports whether this matcher applies to the given request.
-func (a *Matcher) Applicable(_ context.Context, _ sdk.MatchRequest) (bool, error) {
+func (a *Matcher) Applicable(_ context.Context, _ sdkplugin.MatchRequest) (bool, error) {
 	return true, nil
 }
 
@@ -249,7 +252,7 @@ func (a *Matcher) Applicable(_ context.Context, _ sdk.MatchRequest) (bool, error
 // PURL, Matched, and the vulnerability list. The host merges deltas by PURL;
 // Package.MergeFrom unions vulnerabilities by (Source, ID) and ORs Matched in,
 // so applying the deltas reproduces the in-place enrichment.
-func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResult, error) {
+func (a *Matcher) Match(_ context.Context, req sdkplugin.MatchRequest) (sdkplugin.MatchResult, error) {
 	started := time.Now()
 	useDeltas := req.AcceptPackageUpdates
 	if req.Graph == nil || req.Registry == nil {
@@ -258,7 +261,7 @@ func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResul
 
 	deps := req.Graph.DependencyNodes()
 	if req.Target != nil {
-		deps = []*sdk.DependencyNode{req.Target}
+		deps = []*model.DependencyNode{req.Target}
 	}
 	if len(deps) == 0 {
 		return emptyMatchResult(req, useDeltas), nil
@@ -275,7 +278,7 @@ func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResul
 
 	var toFetch []indexedPkg
 	// enriched is keyed by canonical PURL.
-	enriched := make(map[string][]sdk.Vulnerability, len(deps))
+	enriched := make(map[string][]model.Vulnerability, len(deps))
 	seenPURL := make(map[string]struct{}, len(deps))
 
 	// First pass: try cache
@@ -340,7 +343,7 @@ func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResul
 			a.logger.Warn("osv: batch query failed", zap.Error(err))
 			if a.config.Stderr != nil {
 				if _, werr := fmt.Fprintf(a.config.Stderr, "warn: osv query failed: %v\n", err); werr != nil {
-					return sdk.MatchResult{}, fmt.Errorf("osv write query warning: %w", werr)
+					return sdkplugin.MatchResult{}, fmt.Errorf("osv write query warning: %w", werr)
 				}
 			}
 			return a.matchResult(req, deps, enriched, stats.requestedPackages, useDeltas), fmt.Errorf("osv batch query: %w", err)
@@ -398,7 +401,7 @@ func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResul
 			a.logger.Warn("osv: kev catalog unavailable", zap.Error(err))
 			if a.config.Stderr != nil {
 				if _, werr := fmt.Fprintf(a.config.Stderr, "warn: kev catalog unavailable: %v\n", err); werr != nil {
-					return sdk.MatchResult{}, werr
+					return sdkplugin.MatchResult{}, werr
 				}
 			}
 		} else {
@@ -411,27 +414,27 @@ func (a *Matcher) Match(_ context.Context, req sdk.MatchRequest) (sdk.MatchResul
 }
 
 // emptyMatchResult returns the no-op result for the requested response shape.
-func emptyMatchResult(req sdk.MatchRequest, useDeltas bool) sdk.MatchResult {
+func emptyMatchResult(req sdkplugin.MatchRequest, useDeltas bool) sdkplugin.MatchResult {
 	if useDeltas {
-		return sdk.MatchResult{}
+		return sdkplugin.MatchResult{}
 	}
-	return sdk.MatchResult{Registry: req.Registry}
+	return sdkplugin.MatchResult{Registry: req.Registry}
 }
 
 // matchResult folds enrichment into the requested response shape: in-place
 // registry mutation for legacy hosts, or package-update deltas when the host
 // accepts them. Both shapes mark the matched graph dependencies so embedded
 // execution behaves identically.
-func (a *Matcher) matchResult(req sdk.MatchRequest, deps []*sdk.DependencyNode, enriched map[string][]sdk.Vulnerability, requestedPackages int, useDeltas bool) sdk.MatchResult {
+func (a *Matcher) matchResult(req sdkplugin.MatchRequest, deps []*model.DependencyNode, enriched map[string][]model.Vulnerability, requestedPackages int, useDeltas bool) sdkplugin.MatchResult {
 	if useDeltas {
 		updates := packageVulnerabilityUpdates(deps, enriched)
-		return sdk.MatchResult{
+		return sdkplugin.MatchResult{
 			PackageUpdates: updates,
 			MatcherStats:   osvMatcherStats(enriched, requestedPackages),
 		}
 	}
 	applyPackageVulnerabilityEnrichment(req.Registry, deps, enriched)
-	return sdk.MatchResult{
+	return sdkplugin.MatchResult{
 		Registry:     req.Registry,
 		MatcherStats: osvMatcherStats(enriched, requestedPackages),
 	}
@@ -442,8 +445,8 @@ func (a *Matcher) matchResult(req sdk.MatchRequest, deps []*sdk.DependencyNode, 
 // and the vulnerability list, so the host's MergeFrom application reproduces
 // applyPackageVulnerabilityEnrichment. Matched graph dependencies are marked
 // exactly as the legacy path marks them.
-func packageVulnerabilityUpdates(deps []*sdk.DependencyNode, enriched map[string][]sdk.Vulnerability) []*sdk.Package {
-	purlToDeps := make(map[string][]*sdk.DependencyNode, len(deps))
+func packageVulnerabilityUpdates(deps []*model.DependencyNode, enriched map[string][]model.Vulnerability) []*model.Package {
+	purlToDeps := make(map[string][]*model.DependencyNode, len(deps))
 	order := make([]string, 0, len(deps))
 	for _, dep := range deps {
 		if !dep.RegistryMatchEligible() {
@@ -459,12 +462,12 @@ func packageVulnerabilityUpdates(deps []*sdk.DependencyNode, enriched map[string
 		purlToDeps[purl] = append(purlToDeps[purl], dep)
 	}
 
-	updates := make([]*sdk.Package, 0, len(enriched))
-	emit := func(purl string, entries []sdk.Vulnerability) {
+	updates := make([]*model.Package, 0, len(enriched))
+	emit := func(purl string, entries []model.Vulnerability) {
 		if len(entries) == 0 {
 			return
 		}
-		vulnerabilities := make([]sdk.Vulnerability, 0, len(entries))
+		vulnerabilities := make([]model.Vulnerability, 0, len(entries))
 		seen := make(map[string]struct{}, len(entries))
 		for _, entry := range entries {
 			key := entry.Source + "\x00" + entry.ID
@@ -474,8 +477,8 @@ func packageVulnerabilityUpdates(deps []*sdk.DependencyNode, enriched map[string
 			vulnerabilities = append(vulnerabilities, entry.Clone())
 			seen[key] = struct{}{}
 		}
-		updates = append(updates, &sdk.Package{
-			Coordinates:     sdk.Coordinates{PURL: purl},
+		updates = append(updates, &model.Package{
+			Coordinates:     model.Coordinates{PURL: purl},
 			Matched:         true,
 			Vulnerabilities: vulnerabilities,
 		})
@@ -502,13 +505,13 @@ func packageVulnerabilityUpdates(deps []*sdk.DependencyNode, enriched map[string
 	return updates
 }
 
-func osvMatcherStats(enriched map[string][]sdk.Vulnerability, requestedPackages int) sdk.MatcherStats {
+func osvMatcherStats(enriched map[string][]model.Vulnerability, requestedPackages int) sdkplugin.MatcherStats {
 	vulnerabilities := 0
 	for _, entries := range enriched {
 		vulnerabilities += len(entries)
 	}
 	unmatchedPackages := max(requestedPackages-len(enriched), 0)
-	return sdk.MatcherStats{
+	return sdkplugin.MatcherStats{
 		Name:              Name,
 		DisplayName:       displayName,
 		MatchedPackages:   len(enriched),
@@ -589,7 +592,7 @@ func statsValue(stats *auditStats, getter func(*auditStats) int) int {
 // purl is the canonical PURL already computed for dep.
 // Returns (key, query, true) when there is enough information to query OSV.
 // Returns (_, _, false) when the dependency should be skipped.
-func buildQuery(dep *sdk.DependencyNode, purl string) (cache.Key, BatchQuery, bool) {
+func buildQuery(dep *model.DependencyNode, purl string) (cache.Key, BatchQuery, bool) {
 	if dep.Version == "" {
 		// OSV requires a version for meaningful results.
 		return cache.Key{}, BatchQuery{}, false
@@ -722,7 +725,7 @@ func ecosystemToOSV(eco string) string {
 
 // markKEVVulnerabilities appends KEV state to any vulnerability whose ID or
 // aliases appear in the catalog. Keyed by PURL.
-func markKEVVulnerabilities(vulnerabilities map[string][]sdk.Vulnerability, catalog *KEVCatalog) map[string][]sdk.Vulnerability {
+func markKEVVulnerabilities(vulnerabilities map[string][]model.Vulnerability, catalog *KEVCatalog) map[string][]model.Vulnerability {
 	for purl := range vulnerabilities {
 		for idx := range vulnerabilities[purl] {
 			if catalog.Contains(vulnerabilities[purl][idx].ID, vulnerabilities[purl][idx].Aliases) {
@@ -736,11 +739,11 @@ func markKEVVulnerabilities(vulnerabilities map[string][]sdk.Vulnerability, cata
 
 // applyPackageVulnerabilityEnrichment folds enriched vulnerabilities (keyed by
 // PURL) into the registry, and marks the corresponding dependencies matched.
-func applyPackageVulnerabilityEnrichment(registry *sdk.PackageRegistry, deps []*sdk.DependencyNode, enriched map[string][]sdk.Vulnerability) {
+func applyPackageVulnerabilityEnrichment(registry *model.PackageRegistry, deps []*model.DependencyNode, enriched map[string][]model.Vulnerability) {
 	if registry == nil {
 		return
 	}
-	purlToDeps := make(map[string][]*sdk.DependencyNode, len(deps))
+	purlToDeps := make(map[string][]*model.DependencyNode, len(deps))
 	for _, dep := range deps {
 		if !dep.RegistryMatchEligible() {
 			continue

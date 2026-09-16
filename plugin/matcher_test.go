@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bomly-dev/bomly-sdk"
 	audcache "github.com/bomly-dev/bomly-sdk/filecache"
 	"github.com/bomly-dev/bomly-sdk/testkit"
+
+	"github.com/bomly-dev/bomly-sdk/model"
+	sdkplugin "github.com/bomly-dev/bomly-sdk/plugin"
 )
 
 // --- buildQuery ---
@@ -43,7 +45,7 @@ func TestBuildQuery_PURLBased(t *testing.T) {
 }
 
 func TestBuildQuery_NameEcosystemVersion(t *testing.T) {
-	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "requests",
+	dep := &model.DependencyNode{Coordinates: model.Coordinates{Name: "requests",
 		Version:   "2.28.0",
 		Ecosystem: "python"},
 	}
@@ -73,8 +75,8 @@ func TestBuildQuery_NameEcosystemVersion(t *testing.T) {
 // OSV keys npm packages by their scoped name, and the cache key must separate
 // a scoped package from the same-named unscoped one. See issue #319.
 func TestBuildQuery_NameFallbackKeepsNPMScope(t *testing.T) {
-	scoped := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Org: "tailwindcss", Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
-	unscoped := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
+	scoped := &model.DependencyNode{Coordinates: model.Coordinates{Org: "tailwindcss", Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
+	unscoped := &model.DependencyNode{Coordinates: model.Coordinates{Name: "postcss", Version: "4.3.3", Ecosystem: "npm"}}
 
 	scopedKey, scopedQuery, ok := buildQuery(scoped, "")
 	if !ok {
@@ -98,7 +100,7 @@ func TestBuildQuery_NameFallbackKeepsNPMScope(t *testing.T) {
 }
 
 func TestBuildQuery_SkipsNoVersion(t *testing.T) {
-	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "lodash", Ecosystem: "npm"}}
+	dep := &model.DependencyNode{Coordinates: model.Coordinates{Name: "lodash", Ecosystem: "npm"}}
 	_, _, ok := buildQuery(dep, "")
 	if ok {
 		t.Error("expected package without version to be skipped (no query built)")
@@ -106,7 +108,7 @@ func TestBuildQuery_SkipsNoVersion(t *testing.T) {
 }
 
 func TestBuildQuery_SkipsUnknownEcosystem(t *testing.T) {
-	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{Name: "my-pkg", Version: "1.0.0", Ecosystem: "unknown-eco"}}
+	dep := &model.DependencyNode{Coordinates: model.Coordinates{Name: "my-pkg", Version: "1.0.0", Ecosystem: "unknown-eco"}}
 	_, _, ok := buildQuery(dep, "")
 	if ok {
 		t.Error("expected package with unknown ecosystem and no PURL to be skipped")
@@ -115,9 +117,9 @@ func TestBuildQuery_SkipsUnknownEcosystem(t *testing.T) {
 
 // --- enrichment ---
 
-func buildTestGraph(t testing.TB) *sdk.Graph {
+func buildTestGraph(t testing.TB) *model.Graph {
 	t.Helper()
-	graph := sdk.New()
+	graph := model.New()
 	// Identity is minted through the constructor now, so the fixture states a
 	// package URL rather than assigning coordinates after the fact.
 	dep := testkit.MustDependencyNode(t, "pkg:generic/vulnerable-pkg@1.0.0")
@@ -143,8 +145,8 @@ func TestMatcherMatchEnrichesRegistry(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	registry := sdk.NewPackageRegistry()
-	result, err := matcher.Match(context.Background(), sdk.MatchRequest{
+	registry := model.NewPackageRegistry()
+	result, err := matcher.Match(context.Background(), sdkplugin.MatchRequest{
 		Graph:    buildTestGraph(t),
 		Registry: registry,
 	})
@@ -152,7 +154,7 @@ func TestMatcherMatchEnrichesRegistry(t *testing.T) {
 		t.Fatalf("Match() error = %v", err)
 	}
 
-	var vulns []sdk.Vulnerability
+	var vulns []model.Vulnerability
 	for _, pkg := range result.Registry.All() {
 		vulns = append(vulns, pkg.Vulnerabilities...)
 	}
@@ -190,21 +192,21 @@ func TestMatcherMatchSkipsFirstPartyPackages(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	graph := sdk.New()
+	graph := model.New()
 	// The project's own artifact is a module node now, not a dependency
 	// carrying FirstParty. That flag is gone: under ADR-0041 the node kind
 	// carries ownership, so a workspace member simply is not a dependency
 	// node and DependencyNodes() never yields it. The skip this test pins is
 	// therefore structural rather than a flag check -- which is the point.
-	app := testkit.MustModuleNode(t, "pom.xml", sdk.Coordinates{
-		Name: "my-module", Version: "1.0.0", Ecosystem: sdk.EcosystemMaven,
+	app := testkit.MustModuleNode(t, "pom.xml", model.Coordinates{
+		Name: "my-module", Version: "1.0.0", Ecosystem: model.EcosystemMaven,
 		Org: "com.acme", PURL: "pkg:maven/com.acme/my-module@1.0.0",
 	})
 	dep := testkit.MustDependencyNode(t, "pkg:npm/lodash@4.17.15")
 	_ = graph.AddNode(app)
 	_ = graph.AddNode(dep)
 
-	if _, err := matcher.Match(context.Background(), sdk.MatchRequest{Graph: graph, Registry: sdk.NewPackageRegistry()}); err != nil {
+	if _, err := matcher.Match(context.Background(), sdkplugin.MatchRequest{Graph: graph, Registry: model.NewPackageRegistry()}); err != nil {
 		t.Fatalf("Match() error = %v", err)
 	}
 
@@ -250,13 +252,13 @@ func TestAudit_CacheHit_NoHTTPCall(t *testing.T) {
 	cached := []Vulnerability{{ID: "CVE-2020-1234", Summary: "test vuln"}}
 	_ = audcache.Set(aud.cache, key, cached)
 
-	g := sdk.New()
+	g := model.New()
 	if err := g.AddNode(dep); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
 
-	registry := sdk.NewPackageRegistry()
-	result, err := aud.Match(context.Background(), sdk.MatchRequest{
+	registry := model.NewPackageRegistry()
+	result, err := aud.Match(context.Background(), sdkplugin.MatchRequest{
 		Graph:    g,
 		Registry: registry,
 	})
@@ -319,7 +321,7 @@ func TestAudit_OSVFailure_ReturnsPartialResultAndWarningError(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
-	g := sdk.New()
+	g := model.New()
 	if err := g.AddNode(dep); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
@@ -327,9 +329,9 @@ func TestAudit_OSVFailure_ReturnsPartialResultAndWarningError(t *testing.T) {
 		t.Fatalf("AddNode cached dependency: %v", err)
 	}
 
-	result, err := aud.Match(context.Background(), sdk.MatchRequest{
+	result, err := aud.Match(context.Background(), sdkplugin.MatchRequest{
 		Graph:    g,
-		Registry: sdk.NewPackageRegistry(),
+		Registry: model.NewPackageRegistry(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "osv batch query") {
 		t.Fatalf("Match error = %v, want contextual batch-query error", err)
@@ -348,7 +350,7 @@ func TestAudit_OSVFailure_ReturnsPartialResultAndWarningError(t *testing.T) {
 func TestMarkKEVVulnerabilities_AppendsReason(t *testing.T) {
 	catalog := &KEVCatalog{ids: map[string]struct{}{"CVE-2021-44228": {}}}
 
-	vulns := map[string][]sdk.Vulnerability{
+	vulns := map[string][]model.Vulnerability{
 		"pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1": {
 			{ID: "CVE-2021-44228", Source: "osv", Reasons: []string{"existing reason"}},
 			{ID: "CVE-2099-9999", Source: "osv"},
@@ -381,18 +383,18 @@ func TestMarkKEVVulnerabilities_AppendsReason(t *testing.T) {
 func TestCvssScoreToBand(t *testing.T) {
 	tests := []struct {
 		score float64
-		want  sdk.SeverityLevel
+		want  model.SeverityLevel
 	}{
 		{9.0, "critical"},
 		{9.5, "critical"},
-		{10.0, sdk.SeverityCritical},
-		{7.0, sdk.SeverityHigh},
-		{8.9, sdk.SeverityHigh},
-		{4.0, sdk.SeverityMedium},
-		{6.9, sdk.SeverityMedium},
-		{0.1, sdk.SeverityLow},
-		{3.9, sdk.SeverityLow},
-		{0.0, sdk.SeverityLow},
+		{10.0, model.SeverityCritical},
+		{7.0, model.SeverityHigh},
+		{8.9, model.SeverityHigh},
+		{4.0, model.SeverityMedium},
+		{6.9, model.SeverityMedium},
+		{0.1, model.SeverityLow},
+		{3.9, model.SeverityLow},
+		{0.0, model.SeverityLow},
 	}
 	for _, tt := range tests {
 		got := cvssScoreToBand(tt.score)
@@ -453,16 +455,16 @@ func TestExtractSeverity_FallsBackToGHSATextWhenNoCVSSVector(t *testing.T) {
 	// publish database_specific.severity but no CVSS vector at all.
 	tests := []struct {
 		text string
-		want sdk.SeverityLevel
+		want model.SeverityLevel
 	}{
-		{"CRITICAL", sdk.SeverityCritical},
-		{"HIGH", sdk.SeverityHigh},
-		{"MODERATE", sdk.SeverityMedium},
-		{"MEDIUM", sdk.SeverityMedium},
-		{"LOW", sdk.SeverityLow},
-		{"low", sdk.SeverityLow},
-		{"", sdk.SeverityUnknown},
-		{"UNKNOWN", sdk.SeverityUnknown},
+		{"CRITICAL", model.SeverityCritical},
+		{"HIGH", model.SeverityHigh},
+		{"MODERATE", model.SeverityMedium},
+		{"MEDIUM", model.SeverityMedium},
+		{"LOW", model.SeverityLow},
+		{"low", model.SeverityLow},
+		{"", model.SeverityUnknown},
+		{"UNKNOWN", model.SeverityUnknown},
 	}
 	for _, tt := range tests {
 		got := extractSeverity(nil, &DatabaseSpecific{Severity: tt.text})
@@ -480,8 +482,8 @@ func TestExtractSeverity_CVSSVectorTakesPrecedenceOverGHSAText(t *testing.T) {
 		Score: "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:N/A:L", // low
 	}}, &DatabaseSpecific{Severity: "CRITICAL"})
 
-	if got != sdk.SeverityLow {
-		t.Fatalf("extractSeverity() = %q, want %q (CVSS should win)", got, sdk.SeverityLow)
+	if got != model.SeverityLow {
+		t.Fatalf("extractSeverity() = %q, want %q (CVSS should win)", got, model.SeverityLow)
 	}
 }
 
@@ -500,8 +502,8 @@ func TestDeclaredEcosystemsAreQueryable(t *testing.T) {
 	// are not in OSV at all, so one queryable manager is what the declaration
 	// actually claims.
 	for _, eco := range declared {
-		var managers []sdk.PackageManager
-		for _, manager := range sdk.AllPackageManagers() {
+		var managers []model.PackageManager
+		for _, manager := range model.AllPackageManagers() {
 			if manager.Ecosystem() == eco {
 				managers = append(managers, manager)
 			}
@@ -543,10 +545,10 @@ func TestDeclaredEcosystemsAreQueryable(t *testing.T) {
 // ecosystem query is available: OSV answers the unknown type with an empty
 // result rather than an error.
 func TestBuildQueryFallsBackWhenPURLTypeIsNotOSVIndexed(t *testing.T) {
-	dep := &sdk.DependencyNode{Coordinates: sdk.Coordinates{
+	dep := &model.DependencyNode{Coordinates: model.Coordinates{
 		Name:      "AFNetworking",
 		Version:   "4.0.1",
-		Ecosystem: sdk.EcosystemSwift,
+		Ecosystem: model.EcosystemSwift,
 		PURL:      "pkg:cocoapods/AFNetworking@4.0.1",
 	}}
 
@@ -572,11 +574,11 @@ func TestBuildQueryFallsBackWhenPURLTypeIsNotOSVIndexed(t *testing.T) {
 // must stay on their own unindexed pkg:otp identity. Rebar dependencies do
 // resolve from Hex and must keep matching.
 func TestBuildQueryDoesNotQueryOTPApplicationsAsHex(t *testing.T) {
-	otp, err := sdk.NewDependencyNode(sdk.Coordinates{
+	otp, err := model.NewDependencyNode(model.Coordinates{
 		Name:           "kernel",
 		Version:        "9.2",
-		Ecosystem:      sdk.EcosystemErlang,
-		PackageManager: sdk.PackageManagerOTP,
+		Ecosystem:      model.EcosystemErlang,
+		PackageManager: model.PackageManagerOTP,
 	})
 	if err != nil {
 		t.Fatalf("NewDependencyNode: %v", err)
@@ -598,11 +600,11 @@ func TestBuildQueryDoesNotQueryOTPApplicationsAsHex(t *testing.T) {
 		t.Errorf("PURL = %q, want %q", purlPkg.Purl, "pkg:otp/kernel@9.2")
 	}
 
-	rebar, err := sdk.NewDependencyNode(sdk.Coordinates{
+	rebar, err := model.NewDependencyNode(model.Coordinates{
 		Name:           "cowboy",
 		Version:        "2.10.0",
-		Ecosystem:      sdk.EcosystemErlang,
-		PackageManager: sdk.PackageManagerRebar,
+		Ecosystem:      model.EcosystemErlang,
+		PackageManager: model.PackageManagerRebar,
 	})
 	if err != nil {
 		t.Fatalf("NewDependencyNode: %v", err)
@@ -620,10 +622,10 @@ func TestBuildQueryDoesNotQueryOTPApplicationsAsHex(t *testing.T) {
 // the PURL: it costs one slot in a batch we are already making, and dropping
 // the package would lose the only signal we have.
 func TestBuildQueryKeepsPURLWhenNoEcosystemName(t *testing.T) {
-	dep, err := sdk.NewDependencyNode(sdk.Coordinates{
+	dep, err := model.NewDependencyNode(model.Coordinates{
 		Name:      "zlib",
 		Version:   "1.3",
-		Ecosystem: sdk.EcosystemCPP,
+		Ecosystem: model.EcosystemCPP,
 	})
 	if err != nil {
 		t.Fatalf("NewDependencyNode: %v", err)
@@ -646,9 +648,9 @@ func TestBuildQueryKeepsPURLWhenNoEcosystemName(t *testing.T) {
 // namespaced coordinate shape first and falling back to the bare one. It
 // returns nil when neither mints, which is a real gap rather than a fixture
 // detail.
-func mintExample(eco sdk.Ecosystem, manager sdk.PackageManager) *sdk.DependencyNode {
+func mintExample(eco model.Ecosystem, manager model.PackageManager) *model.DependencyNode {
 	for _, org := range []string{"com.example", ""} {
-		node, err := sdk.NewDependencyNode(sdk.Coordinates{
+		node, err := model.NewDependencyNode(model.Coordinates{
 			Org:            org,
 			Name:           "example",
 			Version:        "1.0.0",

@@ -10,14 +10,14 @@ import (
 	gocvss31 "github.com/pandatix/go-cvss/31"
 	gocvss40 "github.com/pandatix/go-cvss/40"
 
-	"github.com/bomly-dev/bomly-sdk"
+	"github.com/bomly-dev/bomly-sdk/model"
 )
 
 // MapVulnerability converts one OsvVulnerability into an OSV-aligned
 // sdk.Vulnerability, carrying the spec fields through verbatim and computing
 // Bomly enrichment extensions (parsed severity band, CVSS scores, CWEs, fix).
-func MapVulnerability(v Vulnerability) sdk.Vulnerability {
-	return sdk.Vulnerability{
+func MapVulnerability(v Vulnerability) model.Vulnerability {
+	return model.Vulnerability{
 		// OSV-aligned core
 		ID:               v.ID,
 		Aliases:          append([]string(nil), v.Aliases...),
@@ -39,28 +39,28 @@ func MapVulnerability(v Vulnerability) sdk.Vulnerability {
 	}
 }
 
-func mapSeverities(severities []Severity) []sdk.Severity {
+func mapSeverities(severities []Severity) []model.Severity {
 	if len(severities) == 0 {
 		return nil
 	}
-	out := make([]sdk.Severity, 0, len(severities))
+	out := make([]model.Severity, 0, len(severities))
 	for _, s := range severities {
-		out = append(out, sdk.Severity{Type: sdk.SeverityType(strings.TrimSpace(s.Type)), Score: s.Score})
+		out = append(out, model.Severity{Type: model.SeverityType(strings.TrimSpace(s.Type)), Score: s.Score})
 	}
 	return out
 }
 
-func mapAffected(affected []Affected) []sdk.Affected {
+func mapAffected(affected []Affected) []model.Affected {
 	if len(affected) == 0 {
 		return nil
 	}
-	out := make([]sdk.Affected, 0, len(affected))
+	out := make([]model.Affected, 0, len(affected))
 	for _, a := range affected {
-		entry := sdk.Affected{Versions: append([]string(nil), a.Versions...)}
+		entry := model.Affected{Versions: append([]string(nil), a.Versions...)}
 		for _, r := range a.Ranges {
-			cr := sdk.VersionRange{}
+			cr := model.VersionRange{}
 			for _, e := range r.Events {
-				cr.Events = append(cr.Events, sdk.RangeEvent{
+				cr.Events = append(cr.Events, model.RangeEvent{
 					Introduced:   e.Introduced,
 					Fixed:        e.Fixed,
 					LastAffected: e.LastAffected,
@@ -90,14 +90,14 @@ func mapDatabaseSpecific(ds *DatabaseSpecific) map[string]any {
 	return out
 }
 
-func mapCWEs(v Vulnerability) []sdk.CWE {
+func mapCWEs(v Vulnerability) []model.CWE {
 	cweIDs := extractCWEs(v.DatabaseSpecific)
 	if len(cweIDs) == 0 {
 		return nil
 	}
-	out := make([]sdk.CWE, 0, len(cweIDs))
+	out := make([]model.CWE, 0, len(cweIDs))
 	for _, id := range cweIDs {
-		out = append(out, sdk.CWE{ID: id, Source: "osv"})
+		out = append(out, model.CWE{ID: id, Source: "osv"})
 	}
 	return out
 }
@@ -111,7 +111,7 @@ func firstNonEmpty(a, b string) string {
 
 // extractSeverity derives a normalized severity band from OSV severity entries.
 // Prefers CVSS v4 > v3.1 > v3 > v2 > unknown.
-func extractSeverity(severities []Severity, ds *DatabaseSpecific) sdk.SeverityLevel {
+func extractSeverity(severities []Severity, ds *DatabaseSpecific) model.SeverityLevel {
 	scores := map[string]float64{}
 	for _, s := range severities {
 		if score := parseCVSSScore(s.Type, s.Score); score > 0 {
@@ -129,27 +129,27 @@ func extractSeverity(severities []Severity, ds *DatabaseSpecific) sdk.SeverityLe
 	// which drops the SARIF security-severity property entirely and leaves
 	// GitHub showing a generic "Warning" badge instead of Low/Medium/High.
 	if ds != nil {
-		if band := severityFromGHSAText(ds.Severity); band != sdk.SeverityUnknown {
+		if band := severityFromGHSAText(ds.Severity); band != model.SeverityUnknown {
 			return band
 		}
 	}
-	return sdk.SeverityUnknown
+	return model.SeverityUnknown
 }
 
 // severityFromGHSAText maps GitHub Security Advisory's textual severity
 // rating to Bomly's CVSS band vocabulary.
-func severityFromGHSAText(raw string) sdk.SeverityLevel {
+func severityFromGHSAText(raw string) model.SeverityLevel {
 	switch strings.ToUpper(strings.TrimSpace(raw)) {
 	case "CRITICAL":
-		return sdk.SeverityCritical
+		return model.SeverityCritical
 	case "HIGH":
-		return sdk.SeverityHigh
+		return model.SeverityHigh
 	case "MODERATE", "MEDIUM":
-		return sdk.SeverityMedium
+		return model.SeverityMedium
 	case "LOW":
-		return sdk.SeverityLow
+		return model.SeverityLow
 	default:
-		return sdk.SeverityUnknown
+		return model.SeverityUnknown
 	}
 }
 
@@ -227,16 +227,16 @@ func normalizeCVSSVector(kind, raw string) (string, string) {
 	}
 }
 
-func cvssScoreToBand(score float64) sdk.SeverityLevel {
+func cvssScoreToBand(score float64) model.SeverityLevel {
 	switch {
 	case score >= 9.0:
-		return sdk.SeverityCritical
+		return model.SeverityCritical
 	case score >= 7.0:
-		return sdk.SeverityHigh
+		return model.SeverityHigh
 	case score >= 4.0:
-		return sdk.SeverityMedium
+		return model.SeverityMedium
 	default:
-		return sdk.SeverityLow
+		return model.SeverityLow
 	}
 }
 
@@ -254,20 +254,20 @@ func buildReasons(v Vulnerability) []string {
 	return reasons
 }
 
-func buildCVSS(severities []Severity) []sdk.CVSSScore {
+func buildCVSS(severities []Severity) []model.CVSSScore {
 	if len(severities) == 0 {
 		return nil
 	}
-	scores := make([]sdk.CVSSScore, 0, len(severities))
+	scores := make([]model.CVSSScore, 0, len(severities))
 	for _, severity := range severities {
 		score := parseCVSSScore(severity.Type, severity.Score)
 		if score <= 0 {
 			continue
 		}
-		scores = append(scores, sdk.CVSSScore{
+		scores = append(scores, model.CVSSScore{
 			Vector:  strings.TrimSpace(severity.Score),
 			Score:   score,
-			Version: sdk.SeverityType(strings.TrimSpace(severity.Type)),
+			Version: model.SeverityType(strings.TrimSpace(severity.Type)),
 			Source:  "osv",
 		})
 	}

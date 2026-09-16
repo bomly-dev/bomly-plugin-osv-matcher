@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bomly-dev/bomly-sdk"
 	audcache "github.com/bomly-dev/bomly-sdk/filecache"
 	"github.com/bomly-dev/bomly-sdk/system"
+
+	"github.com/bomly-dev/bomly-sdk/httpkit"
 )
 
 const (
@@ -51,9 +52,9 @@ func FetchKEVCatalog(cache *audcache.FileCache, clients ...*http.Client) (*KEVCa
 		client = clients[0]
 	}
 	if client == nil {
-		provider, _ := sdk.NewHTTPClientProviderFromEnv()
+		provider, _ := httpkit.NewClientProviderFromEnv()
 		if provider == nil {
-			provider, _ = sdk.NewHTTPClientProvider(sdk.HTTPClientConfig{})
+			provider, _ = httpkit.NewClientProvider(httpkit.ClientConfig{})
 		}
 		client = provider.Client(kevFetchTimeout)
 	}

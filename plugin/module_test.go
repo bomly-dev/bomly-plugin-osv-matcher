@@ -11,10 +11,13 @@ import (
 	"reflect"
 	"testing"
 
-	sdk "github.com/bomly-dev/bomly-sdk"
 	"github.com/bomly-dev/bomly-sdk/conformance"
 	"github.com/bomly-dev/bomly-sdk/testkit"
 	"go.uber.org/zap"
+
+	"github.com/bomly-dev/bomly-sdk/httpkit"
+	"github.com/bomly-dev/bomly-sdk/model"
+	sdkplugin "github.com/bomly-dev/bomly-sdk/plugin"
 )
 
 // testHost is a minimal HostContext for unit tests.
@@ -23,9 +26,9 @@ type testHost struct {
 }
 
 func (h testHost) Logger() *zap.Logger                 { return zap.NewNop() }
-func (h testHost) HTTPClient() *sdk.HTTPClientProvider { return nil }
-func (h testHost) Runtime() sdk.RuntimeInfo {
-	return sdk.RuntimeInfo{Execution: sdk.ExecutionEmbedded}
+func (h testHost) HTTPClient() *httpkit.ClientProvider { return nil }
+func (h testHost) Runtime() sdkplugin.RuntimeInfo {
+	return sdkplugin.RuntimeInfo{Execution: sdkplugin.ExecutionEmbedded}
 }
 
 func (h testHost) DecodeConfig(v any) error {
@@ -81,9 +84,9 @@ func newOSVServer(t *testing.T) *httptest.Server {
 	return server
 }
 
-func newDeltaTestGraph(t *testing.T) *sdk.Graph {
+func newDeltaTestGraph(t *testing.T) *model.Graph {
 	t.Helper()
-	graph := sdk.New()
+	graph := model.New()
 	dep := testkit.MustDependencyNode(t, "pkg:npm/vulnerable-pkg@1.0.0")
 	if err := graph.AddNode(dep); err != nil {
 		t.Fatalf("AddNode: %v", err)
@@ -108,8 +111,8 @@ func newDeltaMatcher(t *testing.T, apiBase string) *Matcher {
 func TestMatchDeltaEquivalence(t *testing.T) {
 	server := newOSVServer(t)
 
-	legacyRegistry := sdk.NewPackageRegistry()
-	legacy, err := newDeltaMatcher(t, server.URL).Match(context.Background(), sdk.MatchRequest{
+	legacyRegistry := model.NewPackageRegistry()
+	legacy, err := newDeltaMatcher(t, server.URL).Match(context.Background(), sdkplugin.MatchRequest{
 		Graph:    newDeltaTestGraph(t),
 		Registry: legacyRegistry,
 	})
@@ -117,8 +120,8 @@ func TestMatchDeltaEquivalence(t *testing.T) {
 		t.Fatalf("legacy Match() error = %v", err)
 	}
 
-	deltaRegistry := sdk.NewPackageRegistry()
-	delta, err := newDeltaMatcher(t, server.URL).Match(context.Background(), sdk.MatchRequest{
+	deltaRegistry := model.NewPackageRegistry()
+	delta, err := newDeltaMatcher(t, server.URL).Match(context.Background(), sdkplugin.MatchRequest{
 		Graph:                newDeltaTestGraph(t),
 		Registry:             deltaRegistry,
 		AcceptPackageUpdates: true,
@@ -149,7 +152,7 @@ func TestMatchDeltaEquivalence(t *testing.T) {
 		t.Fatalf("delta path mutated request registry: %d packages", got)
 	}
 
-	merged := sdk.ApplyPackageUpdates(deltaRegistry, delta.PackageUpdates)
+	merged := model.ApplyPackageUpdates(deltaRegistry, delta.PackageUpdates)
 	if diff := registryDiff(legacy.Registry, merged); diff != "" {
 		t.Fatalf("merged delta registry differs from legacy registry: %s", diff)
 	}
@@ -159,7 +162,7 @@ func TestMatchDeltaEquivalence(t *testing.T) {
 }
 
 // registryDiff deep-compares two registries package by package.
-func registryDiff(want, got *sdk.PackageRegistry) string {
+func registryDiff(want, got *model.PackageRegistry) string {
 	wantPkgs := want.All()
 	gotPkgs := got.All()
 	if len(wantPkgs) != len(gotPkgs) {
