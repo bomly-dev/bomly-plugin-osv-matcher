@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/bomly-dev/bomly-sdk v0.13.0
-	github.com/pandatix/go-cvss v0.6.2
+	github.com/pandatix/go-cvss v0.6.4
 	go.uber.org/zap v1.28.0
 )
 
