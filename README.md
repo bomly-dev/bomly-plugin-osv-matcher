@@ -30,8 +30,24 @@ This matcher performs network calls **only during enrichment** (`bomly scan
   — the KEV catalog (skippable with `disable_kev`).
 
 Responses are cached on disk (default `~/.bomly/cache/osv`,
-`~/.bomly/cache/osv-vulns`, and `~/.bomly/cache/kev`). Cache failures are
-non-fatal: the matcher logs a warning and continues without caching.
+`~/.bomly/cache/osv-vulns`, and `~/.bomly/cache/kev`). The package-level
+cache directory must be creatable, or the matcher fails to start; if the
+detail or KEV cache directory cannot be created, the matcher runs without that
+cache. A failed cache write is non-fatal: the matcher counts it in its debug
+summary and continues.
+
+## Access
+
+`bomly-plugin.json` declares what the matcher touches, which Bomly shows when you install it and in `bomly plugin info`. It is a disclosure, not a sandbox.
+
+| Access | Why |
+| --- | --- |
+| Reads and writes `home` | The response caches, `~/.bomly/cache/osv`, `~/.bomly/cache/osv-vulns` and `~/.bomly/cache/kev` by default |
+| Network `api.osv.dev` | The OSV API: batch queries and per-vulnerability records |
+| Network `www.cisa.gov` | The CISA KEV catalog, unless `disable_kev` is set |
+| Environment `HOME`, `USERPROFILE` | `os.UserHomeDir` reads `HOME` (`USERPROFILE` on Windows) to locate the default caches |
+
+Setting `api_base` or the cache directories moves the API or the caches to a place you chose; the declaration describes the defaults. The matcher needs no particular pipeline input beyond the packages it is asked to match, so it declares no requirements.
 
 ## Configuration
 
