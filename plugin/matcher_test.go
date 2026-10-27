@@ -675,7 +675,18 @@ func TestNoHomeDirectoryRunsWithoutACache(t *testing.T) {
 	t.Setenv("home", "")
 	cwd := t.TempDir()
 	t.Chdir(cwd)
-	m, err := New(Config{APIBase: "http://127.0.0.1:0"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			_ = json.NewEncoder(w).Encode(BatchResponse{Results: []BatchResult{{Vulns: []VulnRef{{ID: "OSV-2024-0001"}}}}})
+		case "/v1/vulns/OSV-2024-0001":
+			_ = json.NewEncoder(w).Encode(Vulnerability{ID: "OSV-2024-0001", Summary: "Test vuln"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	m, err := New(Config{APIBase: server.URL, EnableKEV: false})
 	if err != nil {
 		t.Fatalf("New with no home directory: %v", err)
 	}
@@ -685,6 +696,18 @@ func TestNoHomeDirectoryRunsWithoutACache(t *testing.T) {
 	key := audcache.NewKey("pkg:npm/a@1.0.0", "a", "npm", "1.0.0")
 	if err := audcache.Set(m.cache, key, "value"); err != nil {
 		t.Fatalf("Set on the disabled cache: %v", err)
+	}
+	// And through Match itself: the uncached matcher still enriches.
+	result, err := m.Match(context.Background(), sdkplugin.MatchRequest{Graph: buildTestGraph(t), Registry: model.NewPackageRegistry()})
+	if err != nil {
+		t.Fatalf("Match without caches: %v", err)
+	}
+	found := false
+	for _, pkg := range result.Registry.All() {
+		found = found || len(pkg.Vulnerabilities) > 0
+	}
+	if !found {
+		t.Error("the uncached matcher attached no vulnerabilities")
 	}
 	if entries, _ := os.ReadDir(cwd); len(entries) != 0 {
 		t.Errorf("the matcher created %d entries in the working directory", len(entries))
