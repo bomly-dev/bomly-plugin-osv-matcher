@@ -48,7 +48,7 @@ is not reported.
 | Network `www.cisa.gov` | The CISA KEV catalog, unless `disable_kev` is set |
 | Environment `HOME`, `USERPROFILE` | `os.UserHomeDir` reads `HOME` (`USERPROFILE` on Windows) to locate the default caches |
 
-Setting `api_base` or the cache directories moves the API or the caches to a place you chose; the declaration describes the defaults. If Bomly cannot find your home directory, the caches fall back to `.bomly-cache/` in the directory Bomly runs in, which the access block does not cover ([bomly-planning#115](https://github.com/bomly-dev/bomly-planning/issues/115)). The matcher needs no particular pipeline input beyond the packages it is asked to match, so it declares no requirements.
+Setting `api_base` or the cache directories moves the API or the caches to a place you chose; the declaration describes the defaults. If Bomly cannot find your home directory, the matcher runs without its caches. The matcher needs no particular pipeline input beyond the packages it is asked to match, so it declares no requirements.
 
 ## Configuration
 

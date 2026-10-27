@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -70,28 +68,28 @@ func DefaultConfig() Config {
 	}
 }
 
-func defaultCacheDir() string {
-	home, err := os.UserHomeDir()
+// defaultDirOrNone returns ~/.bomly/cache/<name>, or "" -- which runs that
+// cache disabled -- when there is no home directory. It never falls back to a
+// path relative to the working directory, which no access declaration
+// describes (bomly-planning#115).
+func defaultDirOrNone(name string) string {
+	dir, err := cache.DefaultDir(name)
 	if err != nil {
-		return filepath.Join(".bomly-cache", "osv")
+		return ""
 	}
-	return filepath.Join(home, ".bomly", "cache", "osv")
+	return dir
+}
+
+func defaultCacheDir() string {
+	return defaultDirOrNone("osv")
 }
 
 func defaultKEVCacheDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".bomly-cache", "kev")
-	}
-	return filepath.Join(home, ".bomly", "cache", "kev")
+	return defaultDirOrNone("kev")
 }
 
 func defaultVulnDetailCacheDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".bomly-cache", "osv-vulns")
-	}
-	return filepath.Join(home, ".bomly", "cache", "osv-vulns")
+	return defaultDirOrNone("osv-vulns")
 }
 
 // Matcher implements sdk.Matcher using the OSV API.
@@ -122,8 +120,9 @@ type auditStats struct {
 	detailCacheWriteFails  int
 }
 
-// New creates a new OSV matcher. Returns an error if the cache directory
-// cannot be created.
+// New creates a new OSV matcher. Returns an error if a configured package
+// cache directory cannot be created; with no home directory and no
+// configured one, it runs without that cache.
 func New(config Config) (*Matcher, error) {
 	if config.CacheDir == "" {
 		config.CacheDir = defaultCacheDir()
@@ -155,19 +154,24 @@ func New(config Config) (*Matcher, error) {
 		config.KEVClient = config.HTTPClientProvider.Client(kevFetchTimeout)
 	}
 
-	c, err := cache.NewFileCache(config.CacheDir, config.CacheTTL)
-	if err != nil {
-		return nil, fmt.Errorf("osv auditor: %w", err)
+	// An empty directory means that cache is off: a nil *FileCache misses
+	// every Get and ignores every Set, so the matcher runs without it.
+	var c *cache.FileCache
+	if config.CacheDir != "" {
+		var err error
+		c, err = cache.NewFileCache(config.CacheDir, config.CacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("osv auditor: %w", err)
+		}
 	}
-	kevCache, err := cache.NewFileCache(config.KEVCacheDir, config.KEVCacheTTL)
-	if err != nil {
-		// KEV cache init failure is non-fatal; we'll skip caching KEV results.
-		kevCache = nil
+	// The KEV and detail caches are best-effort: failing to create one runs
+	// without it rather than failing the matcher.
+	var kevCache, detailCache *cache.FileCache
+	if config.KEVCacheDir != "" {
+		kevCache, _ = cache.NewFileCache(config.KEVCacheDir, config.KEVCacheTTL)
 	}
-	detailCache, err := cache.NewFileCache(config.VulnDetailCacheDir, config.VulnDetailCacheTTL)
-	if err != nil {
-		// Detail cache failure is non-fatal; we'll fetch without caching.
-		detailCache = nil
+	if config.VulnDetailCacheDir != "" {
+		detailCache, _ = cache.NewFileCache(config.VulnDetailCacheDir, config.VulnDetailCacheTTL)
 	}
 
 	logger := config.Logger
