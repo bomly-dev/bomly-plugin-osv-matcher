@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -662,4 +663,57 @@ func mintExample(eco model.Ecosystem, manager model.PackageManager) *model.Depen
 		}
 	}
 	return nil
+}
+
+// TestNoHomeDirectoryRunsWithoutACache is bomly-planning#115: with no home
+// directory and no configured cache directories, New still succeeds, all
+// three caches are off, and nothing is created in the directory the matcher
+// was started in.
+func TestNoHomeDirectoryRunsWithoutACache(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	t.Setenv("home", "")
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			_ = json.NewEncoder(w).Encode(BatchResponse{Results: []BatchResult{{Vulns: []VulnRef{{ID: "OSV-2024-0001"}}}}})
+		case "/v1/vulns/OSV-2024-0001":
+			_ = json.NewEncoder(w).Encode(Vulnerability{ID: "OSV-2024-0001", Summary: "Test vuln"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	m, err := New(Config{APIBase: server.URL, EnableKEV: false})
+	if err != nil {
+		t.Fatalf("New with no home directory: %v", err)
+	}
+	if m.cache != nil || m.kevCache != nil || m.detailCache != nil {
+		t.Errorf("caches = %v, %v, %v; want all off with no home directory", m.cache, m.kevCache, m.detailCache)
+	}
+	key := audcache.NewKey("pkg:npm/a@1.0.0", "a", "npm", "1.0.0")
+	if err := audcache.Set(m.cache, key, "value"); err != nil {
+		t.Fatalf("Set on the disabled cache: %v", err)
+	}
+	// And through Match itself: the uncached matcher still enriches.
+	result, err := m.Match(context.Background(), sdkplugin.MatchRequest{Graph: buildTestGraph(t), Registry: model.NewPackageRegistry()})
+	if err != nil {
+		t.Fatalf("Match without caches: %v", err)
+	}
+	// The summary proves the detail fetch ran: without it the matcher falls
+	// back to an ID-only record.
+	found := false
+	for _, pkg := range result.Registry.All() {
+		for _, v := range pkg.Vulnerabilities {
+			found = found || (v.ID == "OSV-2024-0001" && v.Summary == "Test vuln")
+		}
+	}
+	if !found {
+		t.Error("the uncached matcher did not attach OSV-2024-0001 with its fetched summary")
+	}
+	if entries, _ := os.ReadDir(cwd); len(entries) != 0 {
+		t.Errorf("the matcher created %d entries in the working directory", len(entries))
+	}
 }
