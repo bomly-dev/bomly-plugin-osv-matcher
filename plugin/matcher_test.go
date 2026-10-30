@@ -702,12 +702,16 @@ func TestNoHomeDirectoryRunsWithoutACache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Match without caches: %v", err)
 	}
+	// The summary proves the detail fetch ran: without it the matcher falls
+	// back to an ID-only record.
 	found := false
 	for _, pkg := range result.Registry.All() {
-		found = found || len(pkg.Vulnerabilities) > 0
+		for _, v := range pkg.Vulnerabilities {
+			found = found || (v.ID == "OSV-2024-0001" && v.Summary == "Test vuln")
+		}
 	}
 	if !found {
-		t.Error("the uncached matcher attached no vulnerabilities")
+		t.Error("the uncached matcher did not attach OSV-2024-0001 with its fetched summary")
 	}
 	if entries, _ := os.ReadDir(cwd); len(entries) != 0 {
 		t.Errorf("the matcher created %d entries in the working directory", len(entries))
