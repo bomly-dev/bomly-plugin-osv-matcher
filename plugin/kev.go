@@ -3,7 +3,9 @@ package plugin
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	audcache "github.com/bomly-dev/bomly-sdk/filecache"
@@ -15,7 +17,10 @@ import (
 const (
 	kevURL          = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 	kevFetchTimeout = 15 * time.Second
-	kevCacheKey     = "kev-catalog"
+	// kevCacheKey is versioned: entries written before the catalog had JSON
+	// methods are an empty object, and reading one as a hit drops every KEV
+	// mark for the run.
+	kevCacheKey = "kev-catalog-v2"
 	// by defaultKEVCacheTTL it is intentionally longer than the OSV TTL; the KEV catalog
 	// is updated less frequently than individual vulnerability queries.
 	defaultKEVCacheTTL        = 6 * time.Hour
@@ -25,6 +30,30 @@ const (
 // KEVCatalog is the in-memory representation of the CISA KEV catalog.
 type KEVCatalog struct {
 	ids map[string]struct{}
+}
+
+// kevCatalogJSON is the on-disk shape of a cached catalog.
+type kevCatalogJSON struct {
+	IDs []string `json:"ids"`
+}
+
+// MarshalJSON writes the catalog as its sorted ID list, so the file cache
+// stores the data rather than an empty object.
+func (k *KEVCatalog) MarshalJSON() ([]byte, error) {
+	return json.Marshal(kevCatalogJSON{IDs: slices.Sorted(maps.Keys(k.ids))})
+}
+
+// UnmarshalJSON restores a catalog written by MarshalJSON.
+func (k *KEVCatalog) UnmarshalJSON(data []byte) error {
+	var raw kevCatalogJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decode kev catalog: %w", err)
+	}
+	k.ids = make(map[string]struct{}, len(raw.IDs))
+	for _, id := range raw.IDs {
+		k.ids[id] = struct{}{}
+	}
+	return nil
 }
 
 type kevResponse struct {
